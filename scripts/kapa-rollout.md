@@ -13,32 +13,51 @@ OINK 升级和关闭 AI 的 staging 可以先发布；真实 AI 联调及生产�
 | `enabled` | 本 PR 设置为 `true`；合入并发布后启用，回退时设为 `false` |
 | `provider` | 当前仅支持 `kapa` |
 | `website_id` | 已配置公开站点标识；启用前核对它确实属于 HugeGraph 项目 |
-| `source_groups.en` | 真实英文、仅最新文档的 source group ID |
-| `source_groups.cn` | 真实中文、仅最新文档的 source group ID；配置键是 `cn`，widget 语言是 `zh` |
+| `source_groups.latest.en` | 真实英文、仅最新文档的 source group ID |
+| `source_groups.latest.cn` | 真实中文、仅最新文档的 source group ID；配置键是 `cn`，widget 语言是 `zh` |
 
-两个 source group ID 已从 Kapa 控制台核对并记录在配置中；这不代表索引范围和真实服务已验收。
-缺失任一 ID 时，开启状态下模板会拒绝构建。
+`source_groups[版本].en/cn` 按版本和语言精确选组。当前配置 `latest`、`1.7`、`1.5`；以后新增 `1.8` 时添加同结构配置即可。
+版本键使用 `versions.json` 的 `id`（例如 `1.7`），不使用发布标签 `1.7.0`。
+AI 开启时，latest 必须配置完整的中英文索引；已有版本配置缺失任一语言 ID 时拒绝构建。
+未配置索引的历史版本保留 Ask AI 入口，点击只显示本地提示，不请求 Kapa，也不检索 latest。
+配置中的公开 ID 不代表索引范围和真实问答已验收。
 `tests/e2e/ai-enabled.yaml` 的 `e2e-source-*` 仅用于模拟测试，不能发布为真实配置。
 source group 限制必须在 Kapa 管理端核对索引内容，不能只验证 ID 非空。
 Kapa 子组会继承 Global 和父组的 sources；必须检查整个继承链，不能将分组过滤误认为语言隔离。
 `data-language=zh` 只改变界面文案，不限制检索语料。
 
-EN/CN 组仅保留各自最新文档来源。旧站、历史版本及混合语言来源应从 Global/共同父组
-移至与 EN/CN 同级的 `Legacy` 组，不能让 `Legacy` 成为它们的父组。
-移动后复查两个组实际可检索的来源及引用；创建空子组本身不产生隔离。
+各版本 EN/CN 组仅保留对应版本、语言的文档来源，所有组应同级隔离。
+旧站和混合语言来源移至同级 `Legacy` 组，不能让 `Legacy` 成为版本组的父组。
+移动后复查各组实际可检索的来源及引用；创建空子组本身不产生隔离。
 来源可以使用文件上传或限定范围的 HTML 抓取。手动刷新后等待索引完成，并记录文档 SHA、
-语言、更新时间和来源范围。当前项目曾显示 demo 自动刷新限制；手动更新可用，不能据此
-声称已建立自动同步。索引完成也不等于真实问答验收通过。
+语言、更新时间和来源范围。自动刷新和审核发布是不同阶段，应复核最近成功部署时间；索引完成也不等于真实问答验收通过。
 
 HTML 抓取分别从 `/docs/` 与 `/cn/docs/` 开始，用锚定到站点和语言目录的 URL 正则
-排除历史路径及其他站点，正文选择器使用 `.td-content`。部署前预览全部页面并核对包含/排除
-列表；保持 Global 关闭，只选对应语言组。验证新来源后，将旧上传移入 Legacy 保留回退能力。
+排除历史路径及其他站点，正文选择器使用 `.td-content`，Parse 的 Exclude selectors 使用 `.td-page-end`，去除修改记录和前后页导航。
+latest 开启 Crawl sitemap，英文显式使用 `https://hugegraph.apache.org/en/sitemap.xml`，中文使用 `https://hugegraph.apache.org/cn/sitemap.xml`；
+sitemap 发现的页面仍须经过各自语言目录的 URL 白名单。部署前预览全部页面并核对包含/排除
+列表；保持 Global 关闭，只选对应版本语言组。历史来源分别限定 `/versions/1.7/docs/`、`/versions/1.7/cn/docs/` 等路径。
+历史构建会删除 sitemap，并保留 `noindex,follow`；不要配置不存在的历史 sitemap，也不要改变搜索引擎归档策略。
+1.7、1.5 中文来源还需将 `/versions/<版本>/cn/docs/changelog/hugegraph-0.12.0-release-notes/`
+加入 Start URLs；这页已发布但没有导航入链。核对覆盖时使用构建后的规范 URL，排除草稿，不能直接以 Markdown 文件数为准。
+验证历史抓取覆盖后再发布，不能因前端 group ID 正确就认为旧版已可问答。验证新来源后，将旧上传移入 Legacy 保留回退能力。
 记录实际抓取站点和候选 SHA；引用会指向抓取站点，staging 来源不能直接当作生产引用配置。
 
 [ASF FAQ](https://privacy.apache.org/faq/committers.html#can-i-use-kapaai-on-our-website-answer-machine)
-确认 Kapa 已签署 DPA，并要求在加载前征得用户同意。本站先展示本地授权弹窗，
+确认 Kapa 已签署 DPA，并要求在加载前征得用户同意。本站在用户首次点击 Ask AI 时展示本地非模态授权说明，
 用户同意后才加载第三方脚本；`data-consent-required=false` 用于避免 widget 再次弹窗，
 不表示跳过本站授权。保留禁用分析 cookie、指纹及反馈的现有配置。
+
+访问页面时只显示 Ask AI 入口；首次点击入口才显示本地非模态说明。用户点击“同意并打开 Ask AI”后，授权保存在当前浏览器中，
+并由同源中英文及历史页面复用。清除网站数据或授权版本变化后会重新询问。
+即使已同意，页面加载也不会请求 Kapa；再次点击 Ask AI 时才加载服务。
+“暂不使用”也会在浏览器中记住，后续页面只显示入口；主动点击入口才再次显示授权说明。
+清除网站浏览器数据并重新加载页面可重置授权；同源其他已授权页面会同步重新加载，卸载第三方资源。
+授权说明与 Ask AI 入口在 HTML 中默认隐藏；本地适配器初始化后仅显示入口，避免闪现及失效按钮。
+存储不可用时仅对当前页面有效。不迁移此前仅限会话的授权，以免延长用户原先同意的范围。
+Widget 从 `data/ai/questions.yaml` 的 36 组中英文常见问题中随机抽取 3 条，当前页面内保持不变，回答后显示低调的 GitHub Issues 求助链接；
+问题池按 Server 16、AI 10、Toolchain 7、Computing 3 分配，每条等概率抽取，因此展示比重由各类题数决定。
+点击社区链接不会自动提交问题或转交会话。
 
 [ASF CSP 文档](https://infra.apache.org/tools/csp.html) 要求新增域名有 VP Data Privacy
 批准依据。核对 Kapa 及其 hCaptcha 依赖的具体域名和许可范围，再修改产物根目录的
@@ -49,7 +68,7 @@ Kapa 服务获准使用不等于任意附带服务或域名都获准。
 ## 当前启用变更
 
 #496 已按维护者要求纳入 `enabled=true` 和既有 staging 验证过的 Kapa/hCaptcha CSP。
-这使合入后的正式站具备技术加载条件；修改 PR 不会立即发布正式站。本站授权弹窗仍保留，
+这使合入后的正式站具备技术加载条件；修改 PR 不会立即发布正式站。本站首次授权说明仍保留，
 第三方资源只在用户同意后加载。CSP 注释记录既有部署依据，不宣称已找到独立批准记录。
 用于正式站的 HTML 来源应直接抓取 `https://hugegraph.apache.org/docs/` 与
 `https://hugegraph.apache.org/cn/docs/`，使回答引用保持在正式域名。切换来源前核对
@@ -89,11 +108,11 @@ Kapa 服务获准使用不等于任意附带服务或域名都获准。
 | 场景 | 必须观察到的结果 |
 | --- | --- |
 | AI 关闭 | 页面、搜索及导航不发送任何第三方 AI 请求 |
-| AI 开启但尚未同意 | 页面加载、输入搜索、打开授权弹窗及取消均无 Kapa/hCaptcha 请求；不能仅检查 cookie |
+| AI 开启但尚未同意 | 页面加载、输入搜索、显示首次授权说明及暂不使用均无 Kapa/hCaptcha 请求；不能仅检查 cookie |
 | 同意并提问 | bundle 只在同意后加载，真实请求与回答成功；响应头和控制台没有阻止该流程的 CSP 错误 |
-| 中英文 | 英文使用 `.en` group、中文使用 `.cn` group；回答引用来自对应语言的最新文档，不混入历史语料 |
+| 中英文与版本 | 使用当前版本 `.en` 或 `.cn` group；latest、1.7、1.5 的回答引用保持在各自版本和语言路径 |
 | 继承与引用 | EN/CN 不再继承旧 Global/父组来源；用各语言真实问题检查返回引用，确认 Legacy 内容未泄漏到回答 |
-| 历史页面 | 明确显示 AI 使用最新文档的提示，不暗示回答适用于当前历史版本 |
+| 历史页面 | 搜索结果、授权说明与入口提示注明当前版本；无索引版本点击只显示本地提示，无 Kapa/hCaptcha 请求 |
 | 取消与焦点 | 取消授权、Escape、重新打开原生搜索不会被过期异步响应再次打开 AI；键盘焦点可继续操作 |
 | 超时与失败 | 网络失败有可理解提示，原生搜索仍可用；重试只触发一次新的加载，成功后可继续提问 |
 | 回退 | 发布 AI 关闭的已知配置后，新页面访问无第三方 AI 请求，原生搜索保持可用 |

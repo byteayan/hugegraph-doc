@@ -9,6 +9,8 @@ search_keywords:
 search_boost: 1.5
 ---
 
+表格中的默认值指选项未在配置文件中显式设置时采用的源码默认值；发行包配置文件可能写入不同的值并覆盖它，实际运行值应以对应安装包的配置文件为准。
+
 ### Gremlin Server 配置项
 
 对应配置文件`gremlin-server.yaml`
@@ -26,6 +28,7 @@ search_boost: 1.5
 | resultIterationBatchSize  | 64                                                                                                           | 流式返回结果集时，每批返回的结果条数。                                     |
 | ssl.enabled               | false                                                                                                        | Gremlin Server 是否启用 TLS。                                              |
 | authentication            | 未配置                                                                                                        | 启用认证时配置认证器、处理器和 `rest-server.properties` 路径。                   |
+{.td-table--wide}
 
 ### Rest Server & API 配置项
 
@@ -34,12 +37,11 @@ search_boost: 1.5
 | config option                          | default value                                    | description                                                                                                                                                                                                   |
 |----------------------------------------|--------------------------------------------------|---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
 | graphs                                 | ./conf/graphs                                    | 图配置 properties 文件所在目录。                                                                                                                                                                                |
-| graph.load_from_local_config           | false                                            | 是否在 Server 启动时读取 `graphs` 目录；使用本地图配置时需设为 `true`。                                                                                                                        |
+| graph.load_from_local_config           | false                                            | 控制构造阶段预加载。应用初始化仍扫描并尝试加载本地配置，`false` 不会阻止本地加载。图配置变化通过重启 Server 应用。 |
 | graphs.enable_dynamic_create_drop      | true                                             | Whether to enable create or drop graph dynamically.                                                                                                                                                           |
 | init_store.enabled                     | true                                             | Whether init-store initializes the local backend stores and the built-in admin account. Set false in distributed deployments (PD/HStore) where the storage side already owns the metadata.                     |
 | server.id                              | 空字符串                                         | The optional legacy id of hugegraph-server.                                                                                                                                                                   |
 | server.role                            | master                                           | The role of nodes in the cluster, available types are [master, worker, computer]                                                                                                                              |
-| server.role_election                   | false                                            | Whether to enable role election, if enabled, the server will elect a master node in the cluster.                                                                                                               |
 | server.node_id                         | node-id1                                         | The node id of the server.                                                                                                                                                                                    |
 | server.node_role                       | worker                                           | The node role of the server.                                                                                                                                                                                  |
 | server.graphspace                       | DEFAULT                                          | The graph space of the server.                                                                                                                                                                                |
@@ -67,30 +69,16 @@ search_boost: 1.5
 | raft.group_peers                       | 127.0.0.1:8090                                   | The rpc address of raft group initial peers.                                                                                                                                                                  |
 | auth.authenticator                     |                                                  | The class path of authenticator implementation. e.g., org.apache.hugegraph.auth.StandardAuthenticator, or a custom implementation.                                                        |
 | auth.graph_store                       | hugegraph                                        | The name of graph used to store authentication information, like users, only for org.apache.hugegraph.auth.StandardAuthenticator.                                                                              |
-| auth.admin_pa                          | pa                                               | 内置 admin 账户的初始密码，仅首次启动时生效；部署前必须修改。                                                                                                                                                      |
-| auth.audit_log_rate                    | 1000.0                                           | The max rate of audit log output per user, default value is 1000 records per second.                                                                                                                          |
-| auth.cache_capacity                    | 10240                                            | The max cache capacity of each auth cache item.                                                                                                                                                               |
-| auth.cache_expire                      | 600                                              | The expiration time in seconds of auth cache in auth client and auth server.                                                                                                                                  |
+| auth.admin_pa                          | pa                                               | Server 启动路径初始化内置 admin 账户时使用，默认值为公开的 `pa`，生产部署前必须显式设置强密码。本地持久化后端首次初始化由 `init-store.sh` 交互式读取密码。                                                                                                                                                      |
 | auth.remote_url                        |                                                  | If the address is empty, it provide auth service, otherwise it is auth client and also provide auth service through rpc forwarding. The remote url can be set to multiple addresses, which are concat by ','. |
-| auth.token_expire                      | 86400                                            | The expiration time in seconds after token created                                                                                                                                                            |
-| auth.token_secret                      | 启动时随机生成                                   | HS256 的密钥；需要跨重启保持既有 token 有效时应显式配置。                                                                                                                                                                       |
 | exception.allow_trace                  | true                                             | Whether to allow exception trace stack.                                                                                                                                                                       |
 | memory_monitor.threshold               | 0.85                                             | Threshold for JVM memory usage monitoring, 1 means disabling the memory monitoring task.                                                                                                                      |
 | memory_monitor.period                  | 2000                                             | The period in ms of JVM memory usage monitoring, in each period we will detect the jvm memory usage and take corresponding actions.                                                                            |
 | log.slow_query_threshold               | 1000                                             | The threshold time(ms) of logging slow query, 0 means logging slow query is disabled.                                                                                                                          |
 | log.slow_query_body_limit              | 512                                              | 慢查询日志记录的请求体最大字节数，0 表示不记录。记录的前缀原样写入，可能包含敏感的 Gremlin 或 Cypher 字面量。                      |
+{.td-table--wide}
 
-> [!DETAILS]- **角色选举配置项 (可选)**
-> 对应配置文件`rest-server.properties`，仅在 `server.role_election=true` 时生效。
->
-> | config option                  | default value         | description                                                                                                                                                                    |
-> |--------------------------------|-----------------------|--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-> | server.role.node_external_url  | http://127.0.0.1:8080 | The url of external accessibility.                                                                                                                                             |
-> | server.role.base_timeout       | 500                   | The role state machine candidate state base timeout time, in ms.                                                                                                                |
-> | server.role.random_timeout     | 1000                  | The random timeout in ms that be used when candidate node request to become master state to reduce competitive voting.                                                          |
-> | server.role.heartbeat_interval | 2                     | The role state machine heartbeat interval second time.                                                                                                                         |
-> | server.role.fail_count         | 5                     | When the node failed count of update or query heartbeat is reaches this threshold, the node will become abdication state to guardsafe property.                                 |
-> | server.role.master_dead_times  | 10                    | When the worker node detects that the number of times the master node fails to update heartbeat reaches this threshold, the worker node will become to a candidate node.        |
+角色选举配置项 `server.role_election` 和 `server.role.*` 仅适用于 1.7.0 及更早版本。之后的版本不再读取这些配置项：若仍然设置，服务可以正常启动，并为每个配置项输出一条警告日志。
 
 ### PD/Meta 配置项 (分布式模式)
 
@@ -101,12 +89,14 @@ search_boost: 1.5
 | usePD                | false                 | Whether use pd.                                                 |
 | pd.peers             | 127.0.0.1:8686        | The pd server peers, separated with commas.                     |
 | cluster              | hg-test               | The cluster name.                                               |
+| pd.stores_wait_timeout | 300                 | 等待 PD 中达到 `pd.initial-store-count` 的 Store 处于活跃状态的秒数，之后才打开 hstore 图；范围为 `0..2147483647`，`0` 表示不等待。 |
 | metrics.data_to_pd   | true                  | Whether to report metrics data to pd.                           |
 | meta.endpoints       | http://127.0.0.1:2379 | meta 端点的 URL。当前代码中没有任何地方读取该配置项，设置后不会生效；meta 连接由 `pd.peers` 建立。 |
 | meta.use_ca          | false                 | Whether to use ca to meta server.                               |
 | meta.ca              |                       | The ca file of meta server.                                     |
 | meta.client_ca       |                       | The client ca file of meta server.                              |
 | meta.client_key      |                       | The client key file of meta server.                             |
+{.td-table--wide}
 
 HStore 后端还会从图配置文件 `{graph-name}.properties` 中读取以下两项，默认值 0 表示由 PD 决定：
 
@@ -114,6 +104,20 @@ HStore 后端还会从图配置文件 `{graph-name}.properties` 中读取以下�
 |-------------------------|---------------|-----------------------------------------------------------------|
 | hstore.partition_count  | 0             | Number of partitions, which PD controls partitions based on.    |
 | hstore.shard_count      | 0             | Number of copies, which PD controls partition copies based on.  |
+{.td-table--wide}
+
+### 认证数据图配置项
+
+以下选项写在 `auth.graph_store` 指定图的 properties 文件中，默认文件为 `conf/graphs/hugegraph.properties`。`auth.authenticator`、`auth.graph_store`、`auth.admin_pa` 和 `auth.remote_url` 则配置在上方的 `rest-server.properties` 表中。
+
+| config option | default value | description |
+|---------------|---------------|-------------|
+| auth.audit_log_rate | 1000.0 | 每用户认证审计日志的最大输出速率，单位为条/秒，取非负数。运行时截断为整数：`1.9` 按 `1` 条/秒，`0` 或小于 `1` 的值会抑制审计日志；建议使用正整数。 |
+| auth.cache_capacity                    | 10240                                            | 每个认证缓存的容量上限，取非负整数。                                                                                                                                                               |
+| auth.cache_expire                      | 600                                              | 认证客户端和服务端缓存的过期时间，单位为秒，取非负整数。                                                                                                                                  |
+| auth.token_expire                      | 86400                                            | JWT token 的有效期，单位为秒，取非负整数。                                                                                                                                                            |
+| auth.token_secret                      | 32 个随机字节经 Base64 编码                         | 认证数据图的配置项；默认密钥不写回文件。若需跨重启或跨节点验证 token，应在每个节点的认证图配置中设置同一个强随机值。HS256 密钥按 UTF-8 字节计至少 32 字节。                                                                                                                                 |
+{.td-table--wide}
 
 ### 基本配置项
 
@@ -132,6 +136,7 @@ HStore 后端还会从图配置文件 `{graph-name}.properties` 中读取以下�
 | alias.graph.id                        |                                              | The graph alias id.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
 | graph.read_mode                       | OLTP_ONLY                                    | The graph read mode, which could be ALL &#124; OLTP_ONLY &#124; OLAP_ONLY.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
 | pd.peers                              | 127.0.0.1:8686                               | The addresses of pd nodes, separated with commas. Only used by the hstore backend.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
+| pd.cluster                            | hg                                           | 图连接 PD 元数据时使用的集群名前缀，适用于 `usePD=false`；若 Server 以 `usePD=true` 启动，则优先使用 REST 配置中的 `cluster`。此值在进程内绑定一次。                                                                                                                                                                                                                                                                                                                                                                                                            |
 | schema.illegal_name_regex             | .*\s+$&#124;~.*                              | The regex specified the illegal format for schema name.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
 | schema.cache_capacity                 | 10000                                        | The max cache size(items) of schema cache.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
 | schema.init_template                  |                                              | The template schema used to init graph.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
@@ -189,10 +194,10 @@ HStore 后端还会从图配置文件 `{graph-name}.properties` 中读取以下�
 | memory.max_capacity                   | 1073741824                                   | The maximum memory capacity in bytes that can be managed for all queries in HugeGraph.                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
 | memory.one_query_max_capacity         | 104857600                                    | The maximum memory capacity in bytes that can be managed for a query in HugeGraph.                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
 | memory.alignment                      | 8                                            | The alignment used for round memory size.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+{.td-table--wide}
 
 > [!DETAILS]- **Raft 配置项 (已废弃)**
-> 发行包中的图配置模板已将这些配置项标注为废弃。它们仅在 `raft.mode=true` 时生效，
-> 且 `raft.group_peers` 从 `rest-server.properties` 读取，而不是图配置文件。
+> 发行包中的图配置模板已将这些配置项标注为废弃。它们仅在 `raft.mode=true` 时生效，且 `raft.group_peers` 从 `rest-server.properties` 读取，而不是图配置文件。
 >
 > | config option                     | default value        | description                                                                                                                                                                                                                                                                       |
 > |-----------------------------------|----------------------|-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
@@ -218,6 +223,7 @@ HStore 后端还会从图配置文件 `{graph-name}.properties` 中读取以下�
 > | raft.install_snapshot_rpc_timeout | 36000                | The install snapshot rpc timeout in seconds for jraft rpc.                                                                                                                                                                                                                        |
 > | raft.rpc_buf_low_water_mark       | 10485760             | The ChannelOutboundBuffer's low water mark of netty, when buffer size less than this size, the method ChannelOutboundBuffer.isWritable() will return true, it means that low downstream pressure or good network.                                                                   |
 > | raft.rpc_buf_high_water_mark      | 20971520             | The ChannelOutboundBuffer's high water mark of netty, only when buffer size exceed this size, the method ChannelOutboundBuffer.isWritable() will return false, it means that the downstream pressure is too great to process the request or network is very congestion, upstream needs to limit rate at this time. |
+> {.td-table--wide}
 
 ### RocksDB 后端配置项
 
@@ -295,6 +301,7 @@ HStore 后端还会从图配置文件 `{graph-name}.properties` 中读取以下�
 | rocksdb.partition_filters_and_indexes           | false                                            | If bloom filter is enabled, set this option true to use partitioned full filters and indexes for each sst file. This option is incompatible with block-based filters.                                                                                                                                                                                                                                  |
 | rocksdb.pin_top_level_index_and_filter          | true                                             | If partition_filters_and_indexes is set true, set this option true if we'd pin top-level index of partitioned filter and index blocks to the block cache.                                                                                                                                                                                                                                              |
 | rocksdb.prefix_extractor_n_bytes                | 0                                                | The prefix-extractor uses the first N bytes of a key as its prefix, it will use the full key when a key is shorter than the N. 0 means unset prefix-extractor.                                                                                                                                                                                                                                         |
+{.td-table--wide}
 
 > [!DETAILS]- **K8s 配置项 (可选)**
 > 对应配置文件`rest-server.properties`
@@ -323,16 +330,24 @@ HStore 后端还会从图配置文件 `{graph-name}.properties` 中读取以下�
 > | server.default_olap_k8s_namespace | hugegraph-computer-system | The default olap namespace for HugeGraph default graph space.                                 |
 > | k8s.internal_algorithm        | [page-rank, degree-centrality, wcc, triangle-count, rings, rings-with-filter, betweenness-centrality, closeness-centrality, lpa, links, kcore, louvain, clustering-coefficient, ppr, subgraph-match] | The names of the built-in k8s algorithms.        |
 > | k8s.algorithms                | See `ServerOptions.K8S_ALGORITHMS` | The `name:paramsClass` mapping of the built-in k8s algorithms.                              |
+> | k8s.internal_algorithm_image_url | 空 | K8s 内置算法使用的镜像地址。 |
+> {.td-table--wide}
 
-> [!DETAILS]- **Arthas 诊断配置项 (可选)**
-> 对应配置文件`rest-server.properties`
+> [!DETAILS]- **Arthas 诊断配置项（可选）**
+> 对应配置文件为 `rest-server.properties`。
+> 自 HugeGraph 1.8.0 起生效。
 >
-> | config option      | default value | description           |
-> |--------------------|---------------|-----------------------|
-> | arthas.telnetPort  | 8562          | Arthas telnet port.   |
-> | arthas.httpPort    | 8561          | Arthas HTTP port.     |
-> | arthas.ip          | 0.0.0.0       | Arthas bind IP.       |
-> | arthas.disabledCommands | jad      | Disabled Arthas commands, separated by commas. |
+> | 配置项 | 默认值 | 说明 |
+> |--------|--------|------|
+> | arthas.telnet_port | 8562 | 管理员通过 `PUT /arthas` 激活时使用的 Arthas telnet 端口。 |
+> | arthas.http_port | 8561 | 管理员激活时使用的 Arthas HTTP 端口。 |
+> | arthas.ip | 127.0.0.1 | 监听地址；管理员可显式选择其他有效地址，包括 `0.0.0.0`。 |
+> | arthas.disabled_commands | 空 | API 激活时可选的禁用命令，以逗号分隔，例如 `jad,mc`；本地脚本不受此项约束。 |
+> {.td-table--wide}
+>
+> 旧名称 `arthas.telnetPort`、`arthas.httpPort` 与 `arthas.disabledCommands` 仍兼容作为回退项；显式配置的 snake_case 选项优先。
+> 发行包内的 `bin/arthas.sh` 可直接免配置进行本地诊断。
+> 详细激活方式、权限要求及认证配置请参见 [Arthas 诊断代理](/cn/docs/clients/restful-api/other/#1116-启动-arthas-诊断代理)。
 
 > [!DETAILS]- **RPC Server 配置项**
 > 对应配置文件`rest-server.properties`
@@ -353,6 +368,7 @@ HStore 后端还会从图配置文件 `{graph-name}.properties` 中读取以下�
 > | rpc.serialization           | hessian2                                | Rpc serialization type, client and server must set the same value. Note: If you choose 'protobuf', you need to add the relative IDL file. (Could refer PD/Store *.proto)                                       |
 > | rpc.config_order            | 999                                     | Sofa-RPC configuration file loading order, the larger the more later loading.                                                                                                                                 |
 > | rpc.logger_impl             | com.alipay.sofa.rpc.log.SLF4JLoggerImpl | Sofa-RPC log implementation class.                                                                                                                                                                            |
+> {.td-table--wide}
 
 > [!DETAILS]- **HBase 后端配置项**
 > | config option             | default value                  | description                                                              |
@@ -374,6 +390,7 @@ HStore 后端还会从图配置文件 `{graph-name}.properties` 中读取以下�
 > | hbase.enable_partition    | true                           | Is pre-split partitions enabled for HBase.                               |
 > | hbase.vertex_partitions   | 10                             | The number of partitions of the HBase vertex table.                      |
 > | hbase.edge_partitions     | 30                             | The number of partitions of the HBase edge table.                        |
+> {.td-table--wide}
 
 
 ---
@@ -398,12 +415,14 @@ HStore 后端还会从图配置文件 `{graph-name}.properties` 中读取以下�
 > | cassandra.compression_type     | none           | The compression algorithm of cassandra transport: none/snappy/lz4.                                                                             |
 > | cassandra.jmx_port=7199        | 7199           | The port of JMX API service for cassandra.                                                                                                     |
 > | cassandra.aggregation_timeout  | 43200          | The timeout in seconds of waiting for aggregation.                                                                                             |
+> {.td-table--wide}
 
 > [!DETAILS]- **ScyllaDB 后端配置项**
 > | config option | default value | description                |
 > |---------------|---------------|----------------------------|
 > | backend       |               | Must be set to `scylladb`. |
 > | serializer    |               | Must be set to `scylladb`. |
+> {.td-table--wide}
 >
 > 其它与 Cassandra 后端一致。
 
@@ -421,12 +440,14 @@ HStore 后端还会从图配置文件 `{graph-name}.properties` 中读取以下�
 > | jdbc.reconnect_max_times         | 3                           | The reconnect times when the database connection fails.                             |
 > | jdbc.storage_engine              | InnoDB                      | The storage engine of backend store database, like InnoDB/MyISAM/RocksDB for MySQL. |
 > | jdbc.postgresql.connect_database | template1                   | The database used to connect when init store, drop store or check store exist.      |
+> {.td-table--wide}
 
 > [!DETAILS]- **PostgreSQL 后端配置项**
 > | config option | default value | description                  |
 > |---------------|---------------|------------------------------|
 > | backend       |               | Must be set to `postgresql`. |
 > | serializer    |               | Must be set to `postgresql`. |
+> {.td-table--wide}
 >
 > 其它与 MySQL 后端一致。
 >

@@ -19,6 +19,8 @@
 from __future__ import annotations
 
 import argparse
+from concurrent.futures import ProcessPoolExecutor
+from contextlib import contextmanager
 import hashlib
 import html
 import html.parser
@@ -30,6 +32,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 import urllib.parse
 import xml.etree.ElementTree as ET
 from typing import NoReturn
@@ -49,7 +52,7 @@ SHELL_CONTENT_DIRS = (
 )
 SHELL_STATIC_FILES = (
     "favicon.svg",
-    "img/social/hugegraph-default.png",
+    "img/social/hugegraph-apache.png",
 )
 SHELL_STATIC_DIRS = (
     "img/bootstrap-controls",
@@ -130,36 +133,36 @@ DOCS_NAV_GROUP_TITLES = {
 DOCS_NAV_EXPECTED_STATS = {
     "latest": {
         "groups": 5,
-        "pages": 91,
+        "pages": 95,
         "removed": 4,
         "scopedLinks": 0,
-        "treeSha256": "3314337a4c679484d29ebb8e613d5e85dc8bb9020a7465c13b95441b0856f485",
+        "treeSha256": "b33f771f77fc376121902fee37d66235d2920a450320620400320925f985c86a",
     },
     "1.7": {
         "groups": 5,
         "pages": 85,
-        "removed": 5,
+        "removed": 8,
         "scopedLinks": 10,
         "treeSha256": "c87538b82b0e3506eef59417411686ddc188e0f33d0e3a1cda687de8d6f88747",
     },
     "1.5": {
         "groups": 5,
         "pages": 77,
-        "removed": 13,
+        "removed": 16,
         "scopedLinks": 10,
         "treeSha256": "ac29ab8f0e7020496a3a1afe480687043d751e32c93ffb848e2210e3500cd483",
     },
     "1.3": {
         "groups": 5,
         "pages": 68,
-        "removed": 22,
+        "removed": 25,
         "scopedLinks": 10,
         "treeSha256": "e8c9b0a64dac6dd3e47827ec5072697eb7d3ed79659e0b5c4a9c5df8e1408d38",
     },
     "1.0": {
         "groups": 5,
         "pages": 59,
-        "removed": 21,
+        "removed": 24,
         "scopedLinks": 10,
         "treeSha256": "bd45db511d9b6728e1523bd3c5ebd9d18912ee85aeabf79c77bcca7e511f977a",
     },
@@ -1496,6 +1499,74 @@ def first_existing_path(assembly: pathlib.Path, candidates: tuple[str, ...]) -> 
     return matches[0]
 
 
+def ensure_legacy_config_tables_wide(
+    path: pathlib.Path,
+    headers: tuple[tuple[str, ...], ...] = (("config option", "default value", "description"),),
+    required_row: str | None = None,
+) -> int:
+    """Opt frozen technical catalogs into OINK's native horizontal table layout."""
+    source = path.read_text(encoding="utf-8")
+    lines = source.splitlines(keepends=True)
+    allowed_headers = {tuple(cell.lower() for cell in header) for header in headers}
+    result: list[str] = []
+    fence: str | None = None
+    fixed = 0
+    index = 0
+
+    def parts(line: str) -> tuple[str, str]:
+        # Consume only Markdown's permitted table/fence indentation. Residual
+        # whitespace belongs to an indented code example, including in quotes.
+        match = re.match(r"^( {0,3}(?:>[ \t]? {0,3})?)(.*)$", line.rstrip("\r\n"))
+        assert match
+        return match[1], match[2]
+
+    while index < len(lines):
+        prefix, body = parts(lines[index])
+        if fence is not None:
+            if re.fullmatch(rf"{re.escape(fence[0])}{{{len(fence)},}}[ \t]*", body):
+                fence = None
+        else:
+            opening = MARKDOWN_FENCE_OPEN_RE.match(body) if body.startswith(("```", "~~~")) else None
+            if opening:
+                fence = opening.group("marker")
+            elif (body.startswith("|")
+                  and tuple(cell.strip().lower() for cell in body.strip().strip("|").split("|"))
+                  in allowed_headers
+                  and index + 1 < len(lines)
+                  and parts(lines[index + 1])[0].strip() == prefix.strip()
+                  and re.fullmatch(r"\|(?:[ \t]*:?-{3,}:?[ \t]*\|){"
+                                   + str(len(body.strip().strip("|").split("|"))) + "}",
+                                   parts(lines[index + 1])[1].strip())):
+                end = index + 2
+                while end < len(lines) and parts(lines[end])[0].strip() == prefix.strip() and parts(lines[end])[1].startswith("|"):
+                    end += 1
+                result.extend(lines[index:end])
+                if required_row and not any(required_row in line for line in lines[index + 2:end]):
+                    index = end
+                    continue
+                attribute = parts(lines[end])[1].strip() if end < len(lines) and parts(lines[end])[0].strip() == prefix.strip() else ""
+                if attribute.startswith("{") and attribute.endswith("}"):
+                    if not re.search(r"(?<![\w-])td-table--wide(?![\w-])", attribute):
+                        closing = lines[end].rfind("}")
+                        result.append(lines[end][:closing] + " .td-table--wide" + lines[end][closing:])
+                        fixed += 1
+                    else:
+                        result.append(lines[end])
+                    end += 1
+                else:
+                    if not result[-1].endswith("\n"):
+                        result[-1] += "\n"
+                    result.append(prefix + "{.td-table--wide}\n")
+                    fixed += 1
+                index = end
+                continue
+        result.append(lines[index])
+        index += 1
+    if fixed:
+        path.write_text("".join(result), encoding="utf-8")
+    return fixed
+
+
 def apply_known_legacy_fixes(assembly: pathlib.Path, version: str) -> int:
     fixed = 0
     if version in {"1.7", "1.5", "1.3", "1.0"}:
@@ -1542,6 +1613,49 @@ def apply_known_legacy_fixes(assembly: pathlib.Path, version: str) -> int:
                 page = assembly / f"content/{language}/docs/{relative}"
                 if page.is_file():
                     fixed += ensure_search_metadata(page, keywords=keywords, boost=1.5)
+            # Frozen technical catalogs formerly depended on global table CSS.
+            # Bind native layout to audited paths and headers, never all tables.
+            config_headers = (("config option", "default value", "description"),)
+            catalogs = [
+                ("config/config-option.md", config_headers, None),
+                ("config/config-computer.md", config_headers, None),
+                ("quickstart/toolchain/hugegraph-tools.md", (
+                    ("Global Variable", "Environment Variable", "Example"),
+                    ("全局变量", "环境变量", "示例"),
+                ), None),
+                ("quickstart/toolchain/hugegraph-loader.md", (
+                    ("Parameter", "Default value", "Required or not", "Description"),
+                    ("参数", "默认值", "是否必传", "描述信息"),
+                ), None),
+            ]
+            if version == "1.7":
+                environment_headers = (
+                    ("Variable", "Required", "Default", "Description"),
+                    ("变量", "必填", "默认值", "描述"),
+                )
+                catalogs.extend([
+                    ("clients/restful-api/graphspace.md", (
+                        ("Name", "Required", "Type", "Default", "Range/Note", "Description"),
+                        ("Name", "Required", "Type", "Range/Note", "Description"),
+                        ("名称", "是否必填", "类型", "默认值", "取值范围", "说明"),
+                    ), None),
+                    ("quickstart/toolchain/hugegraph-hubble.md", (
+                        ("Configuration Item", "Default Value", "Description"),
+                        ("配置项", "默认值", "说明"),
+                    ), "gremlin.vertex_degree_limit"),
+                    ("quickstart/hugegraph-ai/config-reference.md", (
+                        ("Purpose", "API base", "Key", "Model", "Default maximum tokens"),
+                        ("Purpose", "Host", "Port", "Model"),
+                        ("用途", "API 地址", "密钥", "模型", "最大 token 默认值"),
+                        ("用途", "主机", "端口", "模型"),
+                    ), None),
+                    ("quickstart/hugegraph/hugegraph-pd.md", environment_headers, None),
+                    ("quickstart/hugegraph/hugegraph-hstore.md", environment_headers, None),
+                ])
+            for relative, headers, required_row in catalogs:
+                page = assembly / f"content/{language}/docs/{relative}"
+                if page.is_file():
+                    fixed += ensure_legacy_config_tables_wide(page, headers, required_row)
             summary_path = assembly / f"content/{language}/docs/SUMMARY.md"
             if version in {"1.7", "1.5"}:
                 fixed += repair_historical_performance_routes(summary_path)
@@ -2582,6 +2696,11 @@ def canonical_docs_target(text: str, entry: dict) -> str | None:
     """Resolve the current canonical page to an unscoped route-map target."""
     document = DocumentParser()
     document.feed(text)
+    return _canonical_docs_target(document, entry)
+
+
+def _canonical_docs_target(document: DocumentParser, entry: dict) -> str | None:
+    """Read canonical routing from an already parsed page."""
     if len(document.canonical) != 1:
         return None
     path = urllib.parse.urlsplit(document.canonical[0]).path
@@ -2650,6 +2769,23 @@ def version_switch_options(
 ) -> list[dict]:
     """Return page-aware version choices with explicit missing-page fallbacks."""
     validate_version_routes(route_map, manifest)
+    return _version_switch_options(
+        manifest, route_map, current_version, current_target, origin,
+        historical_origin, language=language,
+    )
+
+
+def _version_switch_options(
+    manifest: dict,
+    route_map: dict,
+    current_version: str,
+    current_target: str | None,
+    origin: str,
+    historical_origin: str | None = None,
+    *,
+    language: str | None = None,
+) -> list[dict]:
+    """Use a route map already validated by load_version_routes or the public API."""
     logical_id = None
     if current_target is not None:
         target_language, _ = docs_target_parts(current_target)
@@ -3419,7 +3555,22 @@ def validate_social_image_metadata(
         fail(f"social image target is missing in {relative}: {value}")
 
 
+@contextmanager
+def timed_stage(label: str):
+    """Emit elapsed wall time even when a validation fails."""
+    started = time.monotonic()
+    try:
+        yield
+    finally:
+        print(f"timing {label}: {time.monotonic() - started:.3f}s", flush=True)
+
+
 def validate_artifact(args: argparse.Namespace) -> None:
+    with timed_stage(f"version-validation[{args.version}]"):
+        _validate_artifact(args)
+
+
+def _validate_artifact(args: argparse.Namespace) -> None:
     manifest = load_manifest(args.manifest)
     route_map = load_version_routes(manifest=manifest)
     entry = next(
@@ -3516,6 +3667,15 @@ def validate_artifact(args: argparse.Namespace) -> None:
                 )
         contract_routes += 1
 
+    # The artifact is read-only throughout validation; repeated navigation URLs
+    # can share filesystem lookups without sharing source-dependent URL checks.
+    target_cache: dict[str, bool] = {}
+
+    def local_target_exists(relative: str) -> bool:
+        if relative not in target_cache:
+            target_cache[relative] = target_exists(root, relative)
+        return target_cache[relative]
+
     def validate_url(value: str, source: pathlib.Path) -> None:
         nonlocal checked_urls
         if not value or value.startswith(("#", "?")):
@@ -3591,7 +3751,7 @@ def validate_artifact(args: argparse.Namespace) -> None:
                 f"URL escapes version {entry['id']} in {source.relative_to(root)}: {value}"
             )
         relative = path[len(prefix) :] if prefix else path
-        if not target_exists(root, relative):
+        if not local_target_exists(relative):
             fail(f"missing local target from {source.relative_to(root)}: {value}")
         checked_urls += 1
 
@@ -3778,8 +3938,8 @@ def validate_artifact(args: argparse.Namespace) -> None:
                 None,
             )
             language = "cn" if relative.startswith("cn/") else "en"
-            current_target = canonical_docs_target(text, entry)
-            expected_options = version_switch_options(
+            current_target = _canonical_docs_target(document, entry)
+            expected_options = _version_switch_options(
                 manifest,
                 route_map,
                 entry["id"],
@@ -3895,7 +4055,7 @@ def validate_artifact(args: argparse.Namespace) -> None:
             expected_hreflang = {
                 language: url
                 for language, url in equivalent_urls.items()
-                if target_exists(root, equivalent_paths[language])
+                if local_target_exists(equivalent_paths[language])
             }
             if actual_hreflang != expected_hreflang:
                 fail(
@@ -4288,19 +4448,23 @@ def write_error_documents(output: pathlib.Path, seen: set[str]) -> int:
     return count
 
 
-def validate_output_security(output: pathlib.Path, site_origin: str) -> None:
+def validate_output_security(
+    output: pathlib.Path, site_origin: str, *, workers: int = 1
+) -> None:
     """Re-scan a complete output tree before it can be published."""
-    subprocess.run(
-        [
-            sys.executable,
-            str(ROOT / "dist/validate-site-output.py"),
-            str(output),
-            site_origin,
-            "--security-only",
-        ],
-        cwd=ROOT,
-        check=True,
-    )
+    with timed_stage(f"security[{output.name}]"):
+        subprocess.run(
+            [
+                sys.executable,
+                str(ROOT / "dist/validate-site-output.py"),
+                str(output),
+                site_origin,
+                "--security-only",
+                "--workers", str(workers),
+            ],
+            cwd=ROOT,
+            check=True,
+        )
 
 
 def validate_aggregate_version_routes(
@@ -4357,10 +4521,11 @@ def validate_aggregate_version_routes(
 def aggregate(args: argparse.Namespace) -> None:
     manifest = load_resolved_manifest(args.resolved_manifest)
     selected = selected_version_ids(getattr(args, "select", None), manifest)
-    output = prepare_output_directory(args.output, "aggregate output")
-    output.mkdir(parents=True)
-    seen: set[str] = set()
-    resolved = []
+    workers = getattr(args, "workers", 1)
+    if workers not in {1, 2}:
+        fail("aggregate workers must be 1 or 2")
+    artifacts = []
+    validations = []
     for entry in manifest["versions"]:
         if entry["id"] not in selected:
             continue
@@ -4377,7 +4542,7 @@ def aggregate(args: argparse.Namespace) -> None:
             fail(f"missing version metadata: {metadata_path}")
         metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
         require_metadata_matches(entry, metadata, metadata_path)
-        validate_artifact(
+        validations.append(
             argparse.Namespace(
                 manifest=args.resolved_manifest,
                 version=entry["id"],
@@ -4387,10 +4552,25 @@ def aggregate(args: argparse.Namespace) -> None:
                 artifact=source,
             )
         )
-        destination = output / entry["publishPath"]
-        destination.mkdir(parents=True, exist_ok=True)
-        copy_without_collision(source, destination, seen)
-        resolved.append(metadata)
+        artifacts.append((entry, source, metadata))
+    with timed_stage("aggregate-validation"):
+        if workers == 1:
+            for validation in validations:
+                validate_artifact(validation)
+        else:
+            with ProcessPoolExecutor(max_workers=workers) as executor:
+                # Consume every result: worker exceptions must prevent publication.
+                list(executor.map(validate_artifact, validations))
+    output = prepare_output_directory(args.output, "aggregate output")
+    output.mkdir(parents=True)
+    seen: set[str] = set()
+    resolved = []
+    with timed_stage("aggregate-copy"):
+        for entry, source, metadata in artifacts:
+            destination = output / entry["publishPath"]
+            destination.mkdir(parents=True, exist_ok=True)
+            copy_without_collision(source, destination, seen)
+            resolved.append(metadata)
     error_documents = write_error_documents(output, seen)
     write_aggregate_sitemap(output, args.site_origin, manifest)
     expected_sitemaps = sitemap_locations(output / "sitemap.xml")
@@ -4430,13 +4610,10 @@ def aggregate(args: argparse.Namespace) -> None:
         json.dumps(route_map, ensure_ascii=False, sort_keys=False, indent=2) + "\n",
         encoding="utf-8",
     )
-    validate_aggregate_version_routes(
-        output,
-        route_map,
-        selected,
-        manifest,
-    )
-    validate_output_security(output, args.site_origin)
+    with timed_stage("aggregate-routes"):
+        validate_aggregate_version_routes(output, route_map, selected, manifest)
+    with timed_stage("aggregate-security"):
+        validate_output_security(output, args.site_origin, workers=workers)
     print(
         f"aggregated {len(resolved)} versions and {len(seen)} files "
         f"with {error_documents} error documents -> {output}"
@@ -4505,6 +4682,7 @@ def parser() -> argparse.ArgumentParser:
     aggregate_parser.add_argument("--site-origin", required=True)
     aggregate_parser.add_argument("--historical-origin")
     aggregate_parser.add_argument("--select")
+    aggregate_parser.add_argument("--workers", type=int, choices=(1, 2), default=1)
     aggregate_parser.add_argument("--output", type=pathlib.Path, required=True)
     aggregate_parser.add_argument("--asf-profile")
     aggregate_parser.add_argument("--asf-whoami")

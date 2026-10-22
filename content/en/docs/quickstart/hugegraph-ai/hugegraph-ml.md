@@ -9,14 +9,14 @@ HugeGraph-ML reads graph data from HugeGraph and converts it to DGL graphs for t
 ## Requirements
 
 - Python 3.10 or later
-- HugeGraph Server 1.0 or later; 1.5 or later is recommended
+- HugeGraph Server 1.5.0 or later; the current workspace client rejects detectable older versions
 - `uv` 0.7 or later
 
 All server access goes through `hugegraph-python-client` (the `pyhugegraph` package) from the same repository. `HugeGraph2DGL` pulls vertices and edges over the Gremlin endpoint with `g.V().hasLabel(...)` and `g.E().hasLabel(...)`, and the dataset importers write through the schema and batch vertex/edge APIs in batches of 500.
 
-The ML stack is version pinned at the repository root under `[tool.uv] constraint-dependencies`:
+The repository root declares ML version constraints under `[tool.uv] constraint-dependencies`:
 
-| Package | Pin |
+| Package | Constraint |
 |---|---|
 | `torch` | `==2.2.0` |
 | `dgl` | `~=2.1.0` |
@@ -27,7 +27,7 @@ The ML stack is version pinned at the repository root under `[tool.uv] constrain
 | `numpy` | `~=1.24.4` |
 | `pandas` | `~=2.2.3` |
 
-Those pins install CPU builds. Every task accepts a `gpu` argument that defaults to `-1`, meaning CPU; pass a device index only after installing CUDA builds of `torch` and `dgl` yourself.
+These constraints limit versions but do not select CPU or CUDA builds. Tasks that support `gpu` default to `-1` for CPU. GPU use requires mutually compatible CUDA builds of `torch` and `dgl`.
 
 ## Installation
 
@@ -39,7 +39,7 @@ source .venv/bin/activate
 cd hugegraph-ml/src
 ```
 
-HugeGraph-ML is a path dependency of the root project but is not a `uv` workspace member. Select the `ml` extra at the repository root instead of creating another lock file in the subdirectory.
+HugeGraph-ML is a path dependency of the root project but is not a `uv` workspace member. Select the `ml` extra at the repository root so `uv` installs it and its local client dependency according to workspace configuration.
 
 ## Implemented Models
 
@@ -95,6 +95,7 @@ hg2d = HugeGraph2DGL(
 | `convert_graph_with_edge_feat(vertex_label, edge_label, node_feat_key="feat", edge_feat_key="edge_feat", label_key="label", mask_keys=None)` | `dgl.DGLGraph` | Also fills `edata["feat"]` |
 | `convert_graph_ogb(vertex_label, edge_label, split_label)` | `(dgl.DGLGraph, split_edge)` | Used by SEAL |
 | `convert_hetero_graph_bgnn(vertex_labels, edge_labels, feat_key="feat", label_key="class", cat_key="cat_features", mask_keys=None)` | DGL heterograph | Used by BGNN |
+{.td-table--wide}
 
 Node features land in `ndata["feat"]`, labels in `ndata["label"]` and each mask in `ndata[<mask key>]`. `NodeEmbed` requires `feat` only; `NodeClassify`, `NodeClassifyWithEdge` and `NodeClassifyWithSample` require `feat`, `label`, `train_mask`, `val_mask` and `test_mask` and raise `ValueError` when one is missing.
 
@@ -113,6 +114,7 @@ Node features land in `ndata["feat"]`, labels in `ndata["label"]` and each mask 
 | `import_graph_from_dgl_with_edge_feat` | `CORA`, `CITESEER`, `PUBMED` | `<NAME>_edge_feat_vertex`, `<NAME>_edge_feat_edge` |
 | `import_graph_from_ogb` | `ogbl-collab`, matched without upper-casing | `<NAME>_vertex`, `<NAME>_edge` |
 | `import_split_edge_from_ogb` | `ogbl-collab`, matched without upper-casing | `<NAME>_split_edge` |
+{.td-table--wide}
 
 Any other name raises `ValueError("dataset not supported")`. `import_split_edge_from_ogb` additionally requires the `idx_to_vertex_id` mapping and a `max_nodes` cap returned by the vertex import.
 
@@ -135,6 +137,7 @@ Task classes live in `hugegraph-ml/src/hugegraph_ml/tasks/`. Each one takes the 
 | `HeteroSampleEmbedGATNE` | `hetero_sample_embed_gatne.py` | `train_and_embed(lr=1e-3, n_epochs=200, gpu=-1)` |
 | `LinkPredictionPGNN` | `link_prediction_pgnn.py` | `train(lr, weight_decay, n_epochs, gpu)` |
 | `LinkPredictionSeal` | `link_prediction_seal.py` | The constructor calls `data_prepare()` itself, then `train(lr=1e-3, n_epochs=200, gpu=-1)` |
+{.td-table--wide}
 
 `patience` defaults to `float("inf")`. `EarlyStopping` in `utils/early_stopping.py` monitors either `loss` or `accuracy`, keeps a copy of the best weights and restores them when training stops.
 
@@ -169,6 +172,7 @@ Each script also exposes a function of the same name, so it can be imported and 
 | `jknet_example.py` | `JKNet` | `NodeClassify` | `CORA_vertex`, `CORA_edge` |
 | `pgnn_example.py` | `PGNN` | `LinkPredictionPGNN` | `CAVEMAN_vertex`, `CAVEMAN_edge` |
 | `seal_example.py` | `DGCNN` | `LinkPredictionSeal` | `ogbl-collab_vertex`, `ogbl-collab_edge`, `ogbl-collab_split_edge` |
+{.td-table--wide}
 
 ## DGI Node Embedding Example
 

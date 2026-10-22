@@ -48,6 +48,14 @@ def _walk_docs_nav_pages(nodes):
         yield from _walk_docs_nav_pages(node.get("children", []))
 
 
+def _validate_parallel_fixture(args):
+    """Picklable validator fixture: workers read inputs and must precede copying."""
+    if (args.artifact.parent.parent / "aggregate").exists():
+        raise AssertionError("aggregate output created before validation finished")
+    if (args.artifact / "index.html").read_text(encoding="utf-8") != args.version:
+        raise AssertionError("wrong artifact submitted to worker")
+
+
 class VersionUrlTest(unittest.TestCase):
     def test_historical_pruning_allows_footer_without_shared_routes(self) -> None:
         with tempfile.TemporaryDirectory() as temp_name:
@@ -296,13 +304,13 @@ class VersionUrlTest(unittest.TestCase):
 
     def test_shell_static_assets_include_all_shared_resources(self) -> None:
         self.assertIn(
-            "img/social/hugegraph-default.png",
+            "img/social/hugegraph-apache.png",
             versioning.SHELL_STATIC_FILES,
         )
         self.assertTrue(
             (
                 versioning.ROOT
-                / "static/img/social/hugegraph-default.png"
+                / "static/img/social/hugegraph-apache.png"
             ).is_file()
         )
         self.assertIn("img/bootstrap-controls", versioning.SHELL_STATIC_DIRS)
@@ -1197,6 +1205,152 @@ class VersionUrlTest(unittest.TestCase):
                     self.assertNotIn("performance/api-performance", summary)
                     self.assertEqual(summary.count("performance/api-preformance"), 3)
 
+    def test_historical_catalog_wide_tables_preserve_quotes_fences_and_attributes(self) -> None:
+        table = "| config option | default value | description |\n|---|---|---|\n| gremlin.graph | value | detail |\n"
+        ordinary = "| Name | Description |\n|---|---|\n| Simple | ordinary table |\n"
+        quoted = "".join("> " + line for line in table.splitlines(keepends=True)).replace("> | gremlin", ">| gremlin")
+        fenced = "```markdown\n" + table + "```\n\n" + "> ~~~markdown\n" + quoted + "> ~~~\n"
+        existing = '{#catalog .existing data-label="preserve } here"}\n'
+        source = table + existing + "\n" + quoted + "\n" + ordinary + "\n" + fenced
+        with tempfile.TemporaryDirectory() as temporary:
+            page = Path(temporary) / "config-option.md"
+            page.write_text(source, encoding="utf-8")
+            self.assertEqual(versioning.ensure_legacy_config_tables_wide(page), 2)
+            rendered = page.read_text(encoding="utf-8")
+            self.assertIn('{#catalog .existing data-label="preserve } here" .td-table--wide}\n', rendered)
+            self.assertIn(quoted + "> {.td-table--wide}\n", rendered)
+            self.assertIn(ordinary, rendered)
+            self.assertIn(fenced, rendered)
+            self.assertEqual(versioning.ensure_legacy_config_tables_wide(page), 0)
+            self.assertEqual(page.read_text(encoding="utf-8"), rendered)
+
+    def test_historical_catalog_preserves_indented_code_examples(self) -> None:
+        table = "| config option | default value | description |\n|---|---|---|\n| key | value | detail |\n"
+        examples = "".join("    " + line for line in table.splitlines(keepends=True))
+        examples += "\n" + "".join(">     " + line for line in table.splitlines(keepends=True))
+        # An indented backtick is literal code, not a new fence that hides the
+        # next real table. Conversely an over-indented closer stays in its fence.
+        examples += "\n    ```literal\n\n"
+        fenced = "```markdown\n    ```\n" + table + "```\n\n"
+        for prefix in ("", "   ", "> ", ">    "):
+            with self.subTest(prefix=prefix), tempfile.TemporaryDirectory() as temporary:
+                page = Path(temporary) / "config-option.md"
+                real_table = "".join(prefix + line for line in table.splitlines(keepends=True))
+                page.write_text(examples + fenced + real_table, encoding="utf-8")
+                self.assertEqual(versioning.ensure_legacy_config_tables_wide(page), 1)
+                expected = examples + fenced + real_table + prefix + "{.td-table--wide}\n"
+                self.assertEqual(page.read_text(encoding="utf-8"), expected)
+                self.assertEqual(versioning.ensure_legacy_config_tables_wide(page), 0)
+                self.assertEqual(page.read_text(encoding="utf-8"), expected)
+
+    def test_historical_catalog_preserves_already_wide_attributes(self) -> None:
+        source = (
+            "| config option | default value | description |\n|---|---|---|\n| key | value | detail |\n"
+            '{#catalog class="td-table--wide other"}\n'
+        )
+        with tempfile.TemporaryDirectory() as temporary:
+            page = Path(temporary) / "config-option.md"
+            page.write_text(source, encoding="utf-8")
+            self.assertEqual(versioning.ensure_legacy_config_tables_wide(page), 0)
+            self.assertEqual(page.read_text(encoding="utf-8"), source)
+
+    def test_known_legacy_catalog_adapter_is_bound_to_versions_languages_and_paths(self) -> None:
+        source = (
+            "---\ntitle: Config\n---\n"
+            "| config option | default value | description |\n|---|---|---|\n| gremlin.graph | value | detail |\n"
+            "\n" + "[legacy](/en/docs/)\n" * 4
+        )
+        for version in ("1.7", "1.5", "1.3", "1.0", "latest", "2.0"):
+            with self.subTest(version=version), tempfile.TemporaryDirectory() as temporary:
+                assembly = Path(temporary)
+                for language in ("en", "cn"):
+                    for name in ("config-option.md", "config-computer.md", "unrelated.md"):
+                        page = assembly / f"content/{language}/docs/config/{name}"
+                        page.parent.mkdir(parents=True, exist_ok=True)
+                        page.write_text(source, encoding="utf-8")
+                with (
+                    mock.patch.object(versioning, "apply_exact_legacy_content_fixes", return_value=0),
+                    mock.patch.object(versioning, "repair_historical_performance_routes", return_value=0),
+                    mock.patch.object(versioning, "normalize_historical_server_headings", return_value=0),
+                    mock.patch.object(versioning, "first_existing_path", return_value=assembly / "server.md"),
+                ):
+                    versioning.apply_known_legacy_fixes(assembly, version)
+                for language in ("en", "cn"):
+                    for name in ("config-option.md", "config-computer.md", "unrelated.md"):
+                        page = assembly / f"content/{language}/docs/config/{name}"
+                        expected = version in {"1.7", "1.5", "1.3", "1.0"} and name != "unrelated.md"
+                        self.assertEqual("{.td-table--wide}" in page.read_text(encoding="utf-8"), expected)
+                        if version in {"latest", "2.0"}:
+                            self.assertEqual(page.read_text(encoding="utf-8"), source)
+
+    def test_frozen_reference_catalog_headers_and_path_guards(self) -> None:
+        def table(header, key="long_configuration_name"):
+            return ("| " + " | ".join(header) + " |\n|" + "---|" * len(header)
+                    + "\n| " + " | ".join([key] + ["value"] * (len(header) - 1)) + " |\n")
+
+        for version in ("1.7", "1.5", "1.3", "1.0", "latest"):
+            with self.subTest(version=version), tempfile.TemporaryDirectory() as temporary:
+                assembly = Path(temporary)
+                fixtures = []
+                for language in ("en", "cn"):
+                    chinese = language == "cn"
+                    fields = (("名称", "是否必填", "类型", "默认值", "取值范围", "说明"),) * 2 if chinese else (
+                        ("Name", "Required", "Type", "Default", "Range/Note", "Description"),
+                        ("Name", "Required", "Type", "Range/Note", "Description"),
+                    )
+                    hubble = ("配置项", "默认值", "说明") if chinese else ("Configuration Item", "Default Value", "Description")
+                    api = ("用途", "API 地址", "密钥", "模型", "最大 token 默认值") if chinese else (
+                        "Purpose", "API base", "Key", "Model", "Default maximum tokens")
+                    host = ("用途", "主机", "端口", "模型") if chinese else ("Purpose", "Host", "Port", "Model")
+                    environment = ("变量", "必填", "默认值", "描述") if chinese else ("Variable", "Required", "Default", "Description")
+                    tools = ("全局变量", "环境变量", "示例") if chinese or version == "1.0" else (
+                        "Global Variable", "Environment Variable", "Example")
+                    loader = ("参数", "默认值", "是否必传", "描述信息") if chinese else (
+                        "Parameter", "Default value", "Required or not", "Description")
+                    cases = [
+                        ("quickstart/toolchain/hugegraph-tools.md", (tools,), 1, True),
+                        ("quickstart/toolchain/hugegraph-loader.md", (loader,), 1, True),
+                        ("clients/restful-api/graphspace.md", fields, 2, False),
+                        ("quickstart/toolchain/hugegraph-hubble.md", (hubble,), 1, False),
+                        ("quickstart/hugegraph-ai/config-reference.md", (api, api, host), 3, False),
+                        ("quickstart/hugegraph/hugegraph-pd.md", (environment,), 1, False),
+                        ("quickstart/hugegraph/hugegraph-hstore.md", (environment,), 1, False),
+                        ("unrelated.md", (tools, loader, *fields, hubble, api, host, environment), 0, False),
+                    ]
+                    for relative, headers, count, all_archives in cases:
+                        source = "---\ntitle: Reference\n---\n\n"
+                        source += "\n".join(table(header, "gremlin.vertex_degree_limit") for header in headers)
+                        # Same-header Spark table, ordinary/JDBC examples, and fenced
+                        # demonstrations must retain their original native layout.
+                        if relative.endswith("hugegraph-hubble.md"):
+                            source += "\n" + table(hubble, "spark.master")
+                        source += "\n" + table(("Node", "Fixed value or common value"))
+                        source += "\n```markdown\n" + table(headers[0], "gremlin.vertex_degree_limit") + "```\n"
+                        source += "\n" + "[legacy](/en/docs/)\n" * 4
+                        page = assembly / f"content/{language}/docs/{relative}"
+                        page.parent.mkdir(parents=True, exist_ok=True)
+                        page.write_text(source, encoding="utf-8")
+                        expected = count if version != "latest" and (all_archives or version == "1.7") else 0
+                        fixtures.append((page, source, headers, expected))
+                with (
+                    mock.patch.object(versioning, "apply_exact_legacy_content_fixes", return_value=0),
+                    mock.patch.object(versioning, "repair_historical_performance_routes", return_value=0),
+                    mock.patch.object(versioning, "normalize_historical_server_headings", return_value=0),
+                    mock.patch.object(versioning, "first_existing_path", return_value=assembly / "server.md"),
+                ):
+                    versioning.apply_known_legacy_fixes(assembly, version)
+                for page, source, headers, expected in fixtures:
+                    rendered = page.read_text(encoding="utf-8")
+                    self.assertEqual(rendered.count("{.td-table--wide}"), expected, str(page))
+                    self.assertIn(table(("Node", "Fixed value or common value")), rendered)
+                    self.assertIn("```markdown\n" + table(headers[0], "gremlin.vertex_degree_limit") + "```\n", rendered)
+                    if expected:
+                        required_row = "gremlin.vertex_degree_limit" if page.name == "hugegraph-hubble.md" else None
+                        self.assertEqual(versioning.ensure_legacy_config_tables_wide(page, headers, required_row), 0)
+                        self.assertEqual(page.read_text(encoding="utf-8"), rendered)
+                    if version == "latest":
+                        self.assertEqual(rendered, source)
+
     def test_scopes_root_relative_urls(self) -> None:
         self.assertEqual(rewrite("/docs/"), "/versions/1.7/docs/")
         self.assertEqual(
@@ -1781,6 +1935,97 @@ class VersionUrlTest(unittest.TestCase):
             with self.assertRaises(SystemExit):
                 versioning.aggregate(args)
 
+    def test_aggregate_parallel_validation_propagates_failure_before_output(self) -> None:
+        # Exercise real process transport, including SystemExit from fail().
+        for workers in (1, 2):
+            with self.subTest(workers=workers), tempfile.TemporaryDirectory() as directory:
+                temp = Path(directory)
+                manifest = versioning.load_manifest(versioning.ROOT / "versions.json")
+                for entry in manifest["versions"]:
+                    entry["sha"] = "a" * 40
+                resolved = temp / "resolved.json"
+                resolved.write_text(json.dumps(manifest), encoding="utf-8")
+                source = temp / "artifacts/latest"
+                source.mkdir(parents=True)
+                # Identity is correct; worker validation must reject the wrong baseURL.
+                (source / ".version.json").write_text(
+                    json.dumps(dict(manifest["versions"][0], baseURL="https://wrong.invalid/")),
+                    encoding="utf-8",
+                )
+                output = temp / "aggregate"
+                output.mkdir()
+                sentinel = output / "previous-output"
+                sentinel.write_text("preserve on validation failure", encoding="utf-8")
+                args = argparse.Namespace(
+                    resolved_manifest=resolved, artifacts=temp / "artifacts",
+                    artifact_prefix="", site_origin=ORIGIN, select="latest",
+                    output=output, asf_profile=None, asf_whoami=None, workers=workers,
+                )
+                with self.assertRaisesRegex(SystemExit, "version metadata does not match"):
+                    versioning.aggregate(args)
+                self.assertEqual(sentinel.read_text(), "preserve on validation failure")
+                self.assertEqual(list(output.iterdir()), [sentinel])
+
+    def test_aggregate_parallel_copy_matches_serial_output(self) -> None:
+        # Keep the worker boundary real while isolating orchestration from the
+        # full site fixtures. Both modes must emit identical complete output.
+        outputs = []
+        for workers in (1, 2):
+            with self.subTest(workers=workers), tempfile.TemporaryDirectory() as directory:
+                temp = Path(directory)
+                entries = [
+                    {"id": "latest", "publishPath": "", "sha": "a" * 40},
+                    {"id": "1.7", "publishPath": "versions/1.7", "sha": "b" * 40},
+                ]
+                for entry in entries:
+                    source = temp / "artifacts" / entry["id"]
+                    source.mkdir(parents=True)
+                    (source / ".version.json").write_text(json.dumps(entry), encoding="utf-8")
+                    (source / "index.html").write_text(entry["id"], encoding="utf-8")
+                    (source / "404.html").write_text("not found", encoding="utf-8")
+                    for language in ("en", "cn"):
+                        (source / language).mkdir()
+                        (source / language / "sitemap.xml").write_text("<urlset/>", encoding="utf-8")
+                args = argparse.Namespace(
+                    resolved_manifest=temp / "resolved.json", artifacts=temp / "artifacts",
+                    artifact_prefix="", site_origin=ORIGIN, output=temp / "aggregate",
+                    asf_profile=None, asf_whoami=None, workers=workers,
+                )
+                with (
+                    mock.patch.object(versioning, "load_resolved_manifest", return_value={"versions": entries}),
+                    mock.patch.object(versioning, "require_metadata_matches"),
+                    mock.patch.object(versioning, "validate_artifact", _validate_parallel_fixture),
+                    mock.patch.object(versioning, "load_version_routes", return_value={}),
+                    mock.patch.object(versioning, "validate_aggregate_version_routes") as routes,
+                    mock.patch.object(versioning, "validate_output_security") as security,
+                ):
+                    versioning.aggregate(args)
+                    routes.assert_called_once()
+                    security.assert_called_once_with(args.output.resolve(), ORIGIN, workers=workers)
+                outputs.append({
+                    path.relative_to(args.output).as_posix(): path.read_bytes()
+                    for path in args.output.rglob("*") if path.is_file()
+                })
+        self.assertEqual(outputs[0], outputs[1])
+        self.assertEqual(outputs[0]["versions/1.7/index.html"], b"1.7")
+
+    def test_canonical_target_reuses_parsed_page(self) -> None:
+        entry = {"publishPath": "versions/1.7"}
+        for target, expected in (("cn/docs/guide/", "cn/docs/guide/"), ("about/", None)):
+            text = f'<link rel="canonical" href="{ORIGIN}versions/1.7/{target}">'
+            document = versioning.DocumentParser()
+            document.feed(text)
+            with mock.patch.object(versioning.DocumentParser, "feed", side_effect=AssertionError("reparsed")):
+                self.assertEqual(versioning._canonical_docs_target(document, entry), expected)
+            self.assertEqual(versioning.canonical_docs_target(text, entry), expected)
+
+    def test_public_version_switch_still_rejects_invalid_routes(self) -> None:
+        manifest = versioning.load_manifest(versioning.ROOT / "versions.json")
+        routes = versioning.load_version_routes(manifest=manifest)
+        routes["schemaVersion"] = -1
+        with self.assertRaises(SystemExit):
+            versioning.version_switch_options(manifest, routes, "latest", "docs/", ORIGIN)
+
     def test_aggregate_flattened_artifact_checks_identity_and_selection(self) -> None:
         for changed_field, select in [(None, "latest"), ("id", "latest"),
                                        ("sha", "latest"), (None, None)]:
@@ -1830,7 +2075,8 @@ class VersionUrlTest(unittest.TestCase):
                 asf_whoami="asf-staging-oink",
             )
 
-            def assert_complete_aggregate(path: Path, origin: str) -> None:
+            def assert_complete_aggregate(path: Path, origin: str, *, workers: int) -> None:
+                self.assertEqual(workers, 1)
                 self.assertEqual(path, output.resolve())
                 self.assertEqual(origin, ORIGIN)
                 self.assertTrue((path / ".asf.yaml").is_file())
@@ -1877,7 +2123,7 @@ class VersionUrlTest(unittest.TestCase):
             ):
                 versioning.aggregate(args)
 
-            security_scan.assert_called_once_with(output.resolve(), ORIGIN)
+            security_scan.assert_called_once_with(output.resolve(), ORIGIN, workers=1)
             validate_routes.assert_called_once()
             validate_args = validate_artifact.call_args.args[0]
             self.assertEqual(

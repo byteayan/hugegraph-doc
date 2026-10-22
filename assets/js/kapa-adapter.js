@@ -29,7 +29,8 @@
     if (!node) return null;
     try {
       var config = JSON.parse(node.textContent || '{}');
-      return config.websiteId && config.sourceGroupId ? config : null;
+      return config.websiteId && (config.sourceGroupId ||
+        (config.labels && config.labels.unavailable)) ? config : null;
     } catch (_) {
       return null;
     }
@@ -62,6 +63,18 @@
     };
     windowObject.Kapa = queue;
     return queue;
+  }
+
+  function pickExampleQuestions(questions, random) {
+    var choices = Array.from(new Set(questions || []));
+    random = random || Math.random;
+    for (var i = choices.length - 1; i > 0; i--) {
+      var j = Math.floor(random() * (i + 1));
+      var value = choices[i];
+      choices[i] = choices[j];
+      choices[j] = value;
+    }
+    return choices.slice(0, 3);
   }
 
   function scriptAttributes(config) {
@@ -104,14 +117,56 @@
       'data-exit-feedback-enabled': 'false',
       'data-user-satisfaction-feedback-enabled': 'false',
       'data-bot-protection-mechanism': 'hcaptcha',
+      'data-example-questions': (config.exampleQuestions || []).join(','),
+      'data-example-questions-col-span': '12',
+      'data-answer-cta-button-enabled': 'true',
+      'data-answer-cta-button-text': config.labels.community,
+      'data-answer-cta-button-link': config.communityURL,
+      'data-answer-cta-button-background-color': 'transparent',
+      'data-answer-cta-button-border': 'none',
+      'data-answer-cta-button-font-weight': '400',
+      'data-answer-cta-button-font-size': '.8rem',
     };
   }
 
   function createController(windowObject, documentObject, config) {
     var state = 'idle';
-    var consented = false;
+    var widgetConfig = Object.assign({}, config, {
+      exampleQuestions: pickExampleQuestions(config.exampleQuestions),
+    });
+    var consentKey = 'hg-ai-consent:v2:' + config.websiteId;
+    var choice = null;
+    try {
+      choice = windowObject.localStorage.getItem(consentKey);
+    } catch (_) {
+      // Storage may be disabled; consent still works for this page only.
+    }
+    var consented = choice === 'granted';
+    windowObject.addEventListener('storage', function (event) {
+      if (event.key !== consentKey && event.key !== null) return;
+      if ((consented && event.newValue !== 'granted') ||
+          (!consented && (event.newValue === 'granted' ||
+            (event.newValue === 'dismissed' && choice !== 'dismissed')))) {
+        // Synchronize other tabs' choices without loading the vendor on startup.
+        windowObject.location.reload();
+      }
+    });
     var pending = null;
     var consent = documentObject.querySelector('[data-hg-ai-consent]');
+    var launcher = documentObject.querySelector('.hg-ask-ai-launcher');
+    if (consent) consent.hidden = true;
+    function renderLauncher(hidden) {
+      if (!launcher) return;
+      launcher.hidden = hidden;
+      if (consented && config.sourceGroupId) launcher.setAttribute('aria-haspopup', 'dialog');
+      else launcher.removeAttribute('aria-haspopup');
+    }
+    renderLauncher(false);
+
+    function dismissConsent() {
+      if (consent) consent.hidden = true;
+      renderLauncher(false);
+    }
     var attempt = 0;
     var timer = 0;
     var lastTrigger = null;
@@ -158,6 +213,7 @@
         discardAttempt(attempt);
         renderState('error', config.labels.error);
         settle(new Error(config.labels.error));
+        restoreFocus();
       }
     }
 
@@ -192,6 +248,7 @@
       discardAttempt(serial);
       renderState('error', config.labels.error);
       settle(new Error(config.labels.error));
+      restoreFocus();
     }
 
     function ready(serial, query, submit) {
@@ -215,7 +272,7 @@
         BUNDLE_URL + (retrying ? '?hg-retry=' + encodeURIComponent(serial) : '');
       script.dataset.hgKapaWidget = '';
       script.dataset.hgKapaAttempt = String(serial);
-      var attrs = scriptAttributes(config);
+      var attrs = scriptAttributes(widgetConfig);
       Object.keys(attrs).forEach(function (name) {
         script.setAttribute(name, attrs[name]);
       });
@@ -260,9 +317,18 @@
     }
 
     function cancelConsent() {
+      if (!consented) {
+        try {
+          windowObject.localStorage.setItem(consentKey, 'dismissed');
+          choice = 'dismissed';
+        } catch (_) {
+          // Without storage the dismissal applies only to this page.
+        }
+      }
       pending = null;
       renderState('idle', '');
-      if (consent && consent.open) consent.close();
+      dismissConsent();
+      if (!lastTrigger) lastTrigger = launcher;
       restoreFocus();
       settle();
     }
@@ -270,6 +336,12 @@
     function activate(query, submit, trigger, context) {
       if (state === 'loading' || state === 'consent') return;
       if (context && context.signal.aborted) return Promise.resolve();
+      if (!config.sourceGroupId) {
+        if (context && !context.handoff()) return Promise.resolve();
+        renderState('unavailable', config.labels.unavailable);
+        if (launcher) launcher.focus();
+        return Promise.resolve();
+      }
       lastTrigger = trigger || documentObject.activeElement;
       var completion;
       if (context) {
@@ -280,13 +352,13 @@
             if (state === 'loading') discardAttempt(attempt);
             attempt += 1;
             pending = null;
-            if (consent && consent.open) consent.close();
+            dismissConsent();
             renderState('idle', '');
             settle();
           };
           context.signal.addEventListener('abort', operation.abort, { once: true });
         });
-        // Transfer focus before opening a dialog; OINK keeps cancellation alive
+        // Transfer focus to the inline notice; OINK keeps cancellation alive
         // until this promise settles, including when search is opened again.
         if (!context.handoff()) {
           settle();
@@ -298,19 +370,21 @@
         return completion;
       }
       // Fail closed if the local consent panel is unavailable.
-      if (!consent || typeof consent.showModal !== 'function') {
+      if (!consent) {
         renderState('error', config.labels.error);
         settle(new Error(config.labels.error));
         return completion;
       }
       pending = { query: trimmedQuery(query), submit: submit };
       renderState('consent', '');
-      consent.showModal();
+      renderLauncher(true);
+      consent.hidden = false;
+      consent.querySelector('[data-hg-ai-continue]').focus();
       return completion;
     }
 
     if (consent) {
-      // Keep the underlying search palette from consuming modal keyboard events.
+      // Keep pending search handoff keyboard events within the consent notice.
       consent.addEventListener('keydown', function (event) {
         event.stopPropagation();
         if (event.key === 'Escape') {
@@ -319,18 +393,20 @@
         }
       });
       consent.querySelector('[data-hg-ai-continue]').addEventListener('click', function () {
-        if (!pending) return;
-        var request = pending;
+        if (!config.sourceGroupId || consented || state === 'loading') return;
+        var request = pending || { query: '', submit: false };
+        if (!pending) lastTrigger = launcher;
         pending = null;
         consented = true;
-        consent.close();
+        try {
+          windowObject.localStorage.setItem(consentKey, 'granted');
+        } catch (_) {
+          // Never bypass initial consent when persistence is unavailable.
+        }
+        dismissConsent();
         load(request.query, request.submit);
       });
       consent.querySelector('[data-hg-ai-cancel]').addEventListener('click', cancelConsent);
-      consent.addEventListener('cancel', function (event) {
-        event.preventDefault();
-        cancelConsent();
-      });
     }
 
     function restoreFocus() {
@@ -339,8 +415,10 @@
       }
     }
 
-    activeQueue = preinitialize(windowObject);
-    invokeKapa(windowObject, 'onModalClose', restoreFocus);
+    if (config.sourceGroupId) {
+      activeQueue = preinitialize(windowObject);
+      invokeKapa(windowObject, 'onModalClose', restoreFocus);
+    }
 
     return {
       activate: activate,
@@ -368,7 +446,7 @@
           return [{
             id: 'ask',
             title: config.labels.ask + ': “' + context.query + '”',
-            description: config.historical ? config.labels.latest + '.' : '',
+            description: config.labels.version || '',
             icon: 'fa-solid fa-wand-magic-sparkles',
           }];
         },
@@ -407,6 +485,7 @@
     preinitialize: preinitialize,
     readConfig: readConfig,
     scriptAttributes: scriptAttributes,
+    pickExampleQuestions: pickExampleQuestions,
     trimmedQuery: trimmedQuery,
   };
   global.HugeGraphKapa = api;

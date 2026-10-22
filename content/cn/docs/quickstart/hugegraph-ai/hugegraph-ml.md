@@ -9,12 +9,12 @@ HugeGraph-ML 从 HugeGraph 读取图数据并转换为 DGL 图，供节点嵌入
 ## 环境要求
 
 - Python 3.10 或更高版本
-- HugeGraph Server 1.0 或更高版本，推荐 1.5 及以上版本
+- HugeGraph Server 1.5.0 或更高版本；当前 workspace 中的 Python 客户端会拒绝可探测到的更低版本
 - `uv` 0.7 或更高版本
 
 所有服务端访问都通过同一仓库中的 `hugegraph-python-client`（即 `pyhugegraph` 包）完成。`HugeGraph2DGL` 使用 Gremlin 接口的 `g.V().hasLabel(...)` 和 `g.E().hasLabel(...)` 拉取点边，数据集导入函数则通过 schema 接口和顶点、边的批量接口写入，每批 500 条。
 
-ML 依赖在仓库根目录的 `[tool.uv] constraint-dependencies` 中固定版本：
+ML 依赖在仓库根目录的 `[tool.uv] constraint-dependencies` 中声明版本约束：
 
 | 依赖 | 版本约束 |
 |---|---|
@@ -27,7 +27,7 @@ ML 依赖在仓库根目录的 `[tool.uv] constraint-dependencies` 中固定版�
 | `numpy` | `~=1.24.4` |
 | `pandas` | `~=2.2.3` |
 
-上述约束安装的是 CPU 版本。每个任务都有 `gpu` 参数，默认值 `-1` 表示使用 CPU；只有自行安装 CUDA 版的 `torch` 和 `dgl` 之后，才可以传入设备编号。
+这些约束限定依赖版本，不指定 CPU 或 CUDA 构建。支持 `gpu` 参数的任务默认值 `-1` 表示使用 CPU；使用 GPU 时，需要安装彼此兼容的 CUDA 版 `torch` 和 `dgl`。
 
 ## 安装
 
@@ -39,7 +39,7 @@ source .venv/bin/activate
 cd hugegraph-ml/src
 ```
 
-HugeGraph-ML 是根项目的路径依赖，但不属于 `uv` workspace members。应在仓库根目录选择 `ml` extra，不要在子目录建立另一套锁文件。
+HugeGraph-ML 是根项目的路径依赖，但不属于 `uv` workspace members。应在仓库根目录选择 `ml` extra，让 `uv` 按 workspace 配置安装它及其本地客户端依赖。
 
 ## 已实现模型
 
@@ -95,6 +95,7 @@ hg2d = HugeGraph2DGL(
 | `convert_graph_with_edge_feat(vertex_label, edge_label, node_feat_key="feat", edge_feat_key="edge_feat", label_key="label", mask_keys=None)` | `dgl.DGLGraph` | 同时填充 `edata["feat"]` |
 | `convert_graph_ogb(vertex_label, edge_label, split_label)` | `(dgl.DGLGraph, split_edge)` | SEAL 使用 |
 | `convert_hetero_graph_bgnn(vertex_labels, edge_labels, feat_key="feat", label_key="class", cat_key="cat_features", mask_keys=None)` | DGL 异构图 | BGNN 使用 |
+{.td-table--wide}
 
 节点特征写入 `ndata["feat"]`，标签写入 `ndata["label"]`，各掩码写入 `ndata[<mask key>]`。`NodeEmbed` 只要求 `feat`；`NodeClassify`、`NodeClassifyWithEdge` 和 `NodeClassifyWithSample` 要求 `feat`、`label`、`train_mask`、`val_mask` 和 `test_mask`，缺少任意一项都会抛出 `ValueError`。
 
@@ -113,6 +114,7 @@ hg2d = HugeGraph2DGL(
 | `import_graph_from_dgl_with_edge_feat` | `CORA`、`CITESEER`、`PUBMED` | `<NAME>_edge_feat_vertex`、`<NAME>_edge_feat_edge` |
 | `import_graph_from_ogb` | `ogbl-collab`，不做大写转换 | `<NAME>_vertex`、`<NAME>_edge` |
 | `import_split_edge_from_ogb` | `ogbl-collab`，不做大写转换 | `<NAME>_split_edge` |
+{.td-table--wide}
 
 传入其他名称会抛出 `ValueError("dataset not supported")`。`import_split_edge_from_ogb` 还需要顶点导入返回的 `idx_to_vertex_id` 映射和 `max_nodes` 上限。
 
@@ -135,6 +137,7 @@ hg2d = HugeGraph2DGL(
 | `HeteroSampleEmbedGATNE` | `hetero_sample_embed_gatne.py` | `train_and_embed(lr=1e-3, n_epochs=200, gpu=-1)` |
 | `LinkPredictionPGNN` | `link_prediction_pgnn.py` | `train(lr, weight_decay, n_epochs, gpu)` |
 | `LinkPredictionSeal` | `link_prediction_seal.py` | 构造函数内部已调用 `data_prepare()`，随后执行 `train(lr=1e-3, n_epochs=200, gpu=-1)` |
+{.td-table--wide}
 
 `patience` 默认值为 `float("inf")`。`utils/early_stopping.py` 中的 `EarlyStopping` 可以监控 `loss` 或 `accuracy`，保存最优权重并在训练结束时恢复。
 
@@ -169,6 +172,7 @@ python ./hugegraph_ml/examples/dgi_example.py
 | `jknet_example.py` | `JKNet` | `NodeClassify` | `CORA_vertex`、`CORA_edge` |
 | `pgnn_example.py` | `PGNN` | `LinkPredictionPGNN` | `CAVEMAN_vertex`、`CAVEMAN_edge` |
 | `seal_example.py` | `DGCNN` | `LinkPredictionSeal` | `ogbl-collab_vertex`、`ogbl-collab_edge`、`ogbl-collab_split_edge` |
+{.td-table--wide}
 
 ## DGI 节点嵌入示例
 
